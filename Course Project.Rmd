@@ -1,0 +1,137 @@
+---
+title: "Machine Learning Course Project"
+author: "Benjamin Lim"
+date: "20/01/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The objective of this project is to built a predictive model that determines the manner in which a participant completed a single type of exercise - the unilateral dumbbell biceps curl. Six male participants between 20 - 28 years with little weight lifting experience were selected as subjects to perform the exercise in one of five different ways. The five ways are: 
+* Exactly according to specification (Class A)
+* Throwing the the elbows to the front (Class B)
+* Lifting the dumbbell only halfway (Class C)
+* lowering the dumbbell only halfway (Class D), and 
+* Throwing the hips to the front (Class E). 
+Class A corresponds to the correct execution while the other 4 classes are common mistakes made.
+
+Data recording was done using four 9-degrees of freedom Razor inertial measurement units (IMU), which were attached to the dumbbell, wrist, upper arm, and waist. To extract the features in the data set, the authors used a sliding window approach with different lengths of 0.5 to 2.5 seconds with 0.5 seconds overlap. In each step of the window, they calculated features on the Euler angles (roll, pitch and yaw), as well as the raw accelerometer, gyroscope and magnetometer readings. For the Euler angles of each of the four sensors they calculated eight features: mean, variance, standard deviation, max, min, amplitude, kurtosis and skew- ness, generating 96 derived feature sets.
+
+## Exploratory Analysis
+
+We will first download and read in the data using the `read.csv` command.
+
+```{r read in data}
+library(ggplot2)
+library(caret)
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "pml-training.csv")
+quality <- read.csv("./pml-training.csv", na.strings = c("NA", ""))
+dim(quality)
+```
+
+Using the `dim()` command, we see that the data consists of a large 19622 rows by 160 column dataframe. To help scope our analysis, we will use the `is.na()` function to identify suitable columns to keep for our analysis.
+
+```{r NA columns}
+apply(is.na(quality),2,mean) -> nacols
+table(nacols)
+```
+
+We see that 100 columns have more than 97% NAs, these columns will be removed from the dataframe to be used in building the model. Further unnecessary columns for prediction include `X` (row numbers), "user_name" (subject name), the time stamp columns `raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp`, and `new_window, num_window`, which refer to the sliding window approach used for feature extraction and selection.
+
+```{r removal of NAs}
+quality <- quality[!nacols]
+## It so happens that the unnecessary columns are also the first 7 columns in the dataframe
+quality <- quality[,-c(1:7)]
+```
+
+We should also eliminate variables that have no variance in order to avoid including variables with no impact on model building efficacy. However, none of the predictors have zero or near zero variance, hence we should retain all of them.
+
+```{r near zero var}
+nearZeroVar(quality[-53], saveMetrics = T)
+```
+
+We will now split the data into a training and cross-validation set using `createDataPartition()` in a 70% to 30% ratio respectively.
+
+```{r split data}
+set.seed(1234)
+inTrain <- createDataPartition(y=quality$classe, p = 0.7, list = F)
+training <- quality[inTrain, ]
+crossval <- quality[-inTrain, ]
+```
+
+## Model Building and Selection
+
+For the purposes of building our model, we will use two of the most accurate model-building methods that often win prediction competitions: random forests and boosting with trees. The relative accuracies of both methods will be compared and the best model (taking into account speed, interpretability and accuracy will be used).
+
+### Random Forest model
+
+Random Forest was selected because it automatically selects important variables and is robust to correlated covariates & outliers in general.  10-fold cross validation with half the default number of trees (150) will be used when applying the algorithm in order to save on computing time while maintaining low error.
+
+```{r random forests}
+ctrl <- trainControl(method = "cv", 10)
+set.seed(5678)
+rfmod <- train(classe~., data = training, method = "rf", trControl = ctrl, ntree = 150)
+rfmod
+```
+
+The performance of the model on the validation set is then computed:
+
+```{r predict rf}
+rfpred <- predict(rfmod, crossval[,-53])
+rf <- confusionMatrix(crossval$classe, rfpred)
+rf
+```
+
+Accuracy is `r rf$overall[[1]]` and the out of sample error rate is thus `r 1-rf$overall[[1]]`.
+
+### Boosting Model
+
+10-fold cross validation will be used when applying the algorithm.
+
+```{r boosting}
+set.seed(5678)
+boostmod <- train(classe~., data = training, method = "gbm", trControl = ctrl, verbose = F)
+boostmod
+```
+
+The performance of this model on the validation set:
+
+```{r predict gbm}
+boostpred <- predict(boostmod, crossval[,-53])
+bst <- confusionMatrix(crossval$classe, boostpred)
+bst
+```
+
+Accuracy is `r bst$overall[[1]]` and the out of sample error is `r 1-bst$overall[[1]]`.
+
+Given the higher accuracy of the random forest model and the lower estimated out of sample error, we have selected the random forests model.
+
+## Prediction for Test Data
+
+```{r test data}
+# download and clean-up of data
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "pml-testing.csv")
+testing <- read.csv("./pml-testing.csv", na.strings = c("NA", ""))
+testing <- testing[!nacols]
+
+data.frame(Question = testing$problem_id, Results = predict(rfmod, testing[,8:59]))
+```
+
+## Appendix
+
+Figure 1. Showing why optimal number of predictors is 27
+```{r Predictor Number}
+plot(rfmod)
+```
+
+Figure 2. Plot of the error rate versus number of trees
+```{r Error Rate}
+plot(rfmod$finalModel)
+```
+
+Figure 3. Top 10 most important variables in random forest model
+```{r Top 10}
+plot(varImp(rfmod), top = 10)
+```
